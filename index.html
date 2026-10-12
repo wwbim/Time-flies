@@ -6,7 +6,7 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
-    canvas { display: block; width: 1920px; height: 1080px; }
+    canvas { display: block; }
   </style>
 </head>
 <body>
@@ -16,19 +16,23 @@
     const canvas = document.getElementById('stage');
     const ctx = canvas.getContext('2d');
     const W = canvas.width;
+    const H = canvas.height;
     const CYCLE_DURATION = 15.0; // 完整 24 小时自然循环周期 (秒)
     const FPS = 60;
 
-    // 暴露标准化动画参数接口，供 render.js 自动自适应探测与提取
+    // 暴露标准化动画参数接口，供 render.js 自动自适应探测与提取 (包含 duration, fps, width, height)
     window.ANIMATION_CONFIG = {
       duration: CYCLE_DURATION,
       fps: FPS,
       width: W,
-      height: H
+      height: H,
+      roi: { w: 360, h: 360, x: 780, y: 79 }
     };
     window.CYCLE_DURATION = CYCLE_DURATION;
     window.ANIMATION_DURATION = CYCLE_DURATION;
     window.FPS = FPS;
+    window.W = W;
+    window.H = H;
 
     // 预生成确定性的伪随机星空坐标
     const NUM_STARS = 140;
