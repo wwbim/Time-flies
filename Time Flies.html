@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>Cut-Paper 24-Hour Cycle Animation</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
+    canvas { display: block; width: 1920px; height: 1080px; }
+  </style>
+</head>
+<body>
+  <canvas id="stage" width="1920" height="1080"></canvas>
+
+  <script>
+    const canvas = document.getElementById('stage');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const CYCLE_DURATION = 15.0; // 完整 24 小时自然循环周期 (秒)
+    const FPS = 60;
+
+    // 暴露标准化动画参数接口，供 render.js 自动自适应探测与提取
+    window.ANIMATION_CONFIG = {
+      duration: CYCLE_DURATION,
+      fps: FPS,
+      width: W,
+      height: H
+    };
+    window.CYCLE_DURATION = CYCLE_DURATION;
+    window.ANIMATION_DURATION = CYCLE_DURATION;
+    window.FPS = FPS;
+
+    // 预生成确定性的伪随机星空坐标
+    const NUM_STARS = 140;
+    const stars = [];
+    let seed = 42;
+    function pseudoRandom() {
+      seed = (seed * 9301 + 49297) % 233280;
+      return seed / 233280;
+    }
+    for (let i = 0; i < NUM_STARS; i++) {
+      stars.push({
+        x: pseudoRandom() * W,
+        y: pseudoRandom() * (H * 0.65),
+        radius: 0.9 + pseudoRandom() * 2.2,
+        phase: pseudoRandom() * Math.PI * 2,
+        speed: 8 + Math.floor(pseudoRandom() * 6) // 整数倍保证 15 秒周期严格闭环
+      });
+    }
+
+    // 数学缓动插值函数 (Smoothstep & Lerp)
+    function clamp(val, min, max) { return Math.max(min, Math.min(max, val)); }
+    function smoothstep(edge0, edge1, x) {
+      const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+      return t * t * (3 - 2 * t);
+    }
+    function lerpColor(c1, c2, factor) {
+      return [
+        Math.round(c1[0] + (c2[0] - c1[0]) * factor),
+        Math.round(c1[1] + (c2[1] - c1[1]) * factor),
+        Math.round(c1[2] + (c2[2] - c1[2]) * factor)
+      ];
+    }
+
+    // 周期性时间调色板采样器 (自然循环无缝过渡)
+    function sampleCycleColor(stops, tau) {
+      const tNorm = ((tau % 1.0) + 1.0) % 1.0;
+      for (let i = 0; i < stops.length - 1; i++) {
+        const cur = stops[i];
+        const next = stops[i + 1];
+        if (tNorm >= cur.t && tNorm <= next.t) {
+          const factor = smoothstep(cur.t, next.t, tNorm);
+          return lerpColor(cur.color, next.color, factor);
+        }
+      }
+      return stops[0].color;
+    }
+
+    // 24小时天空调色板定义 (0.0:午夜 -> 0.28:拂晓日出 -> 0.50:正午艳阳 -> 0.75:晚霞黄昏 -> 1.0:午夜)
+    const skyTopPalette = [
+      { t: 0.00, color: [6, 8, 22] },
+      { t: 0.18, color: [16, 20, 48] },
+      { t: 0.28, color: [48, 55, 115] },
+      { t: 0.38, color: [42, 105, 210] },
+      { t: 0.50, color: [45, 125, 235] },
+      { t: 0.65, color: [65, 55, 120] },
+      { t: 0.75, color: [38, 22, 65] },
+      { t: 0.85, color: [12, 14, 36] },
+      { t: 1.00, color: [6, 8, 22] }
+    ];
+
+    const skyBottomPalette = [
+      { t: 0.00, color: [18, 28, 56] },
+      { t: 0.18, color: [35, 42, 78] },
+      { t: 0.28, color: [255, 145, 95] },
+      { t: 0.38, color: [170, 220, 255] },
+      { t: 0.50, color: [145, 215, 255] },
+      { t: 0.65, color: [255, 165, 100] },
+      { t: 0.75, color: [245, 110, 62] },
+      { t: 0.85, color: [38, 48, 88] },
+      { t: 1.00, color: [18, 28, 56] }
+    ];
+
+    // 四层山脉剪纸调色板 (从远到近)
+    const layer4Palette = [
+      { t: 0.00, color: [24, 36, 68] },
+      { t: 0.28, color: [175, 105, 130] },
+      { t: 0.50, color: [110, 165, 190] },
+      { t: 0.75, color: [145, 68, 96] },
+      { t: 1.00, color: [24, 36, 68] }
+    ];
+
+    const layer3Palette = [
+      { t: 0.00, color: [18, 26, 52] },
+      { t: 0.28, color: [130, 72, 100] },
+      { t: 0.50, color: [78, 130, 150] },
+      { t: 0.75, color: [102, 44, 80] },
+      { t: 1.00, color: [18, 26, 52] }
+    ];
+
+    const layer2Palette = [
+      { t: 0.00, color: [12, 17, 38] },
+      { t: 0.28, color: [88, 44, 78] },
+      { t: 0.50, color: [50, 98, 115] },
+      { t: 0.75, color: [66, 28, 66] },
+      { t: 1.00, color: [12, 17, 38] }
+    ];
+
+    const layer1Palette = [
+      { t: 0.00, color: [6, 9, 22] },
+      { t: 0.28, color: [48, 22, 52] },
+      { t: 0.50, color: [28, 66, 78] },
+      { t: 0.75, color: [36, 14, 46] },
+      { t: 1.00, color: [6, 9, 22] }
+    ];
+
+    // 核心步进渲染接口
+    window.renderFrame = function(t) {
+      ctx.clearRect(0, 0, W, H);
+      const tau = ((t % CYCLE_DURATION) + CYCLE_DURATION) % CYCLE_DURATION / CYCLE_DURATION;
+
+      // 1. 绘制渐变天空底纸
+      const currentTop = sampleCycleColor(skyTopPalette, tau);
+      const currentBottom = sampleCycleColor(skyBottomPalette, tau);
+      const skyGradient = ctx.createLinearGradient(0, 0, 0, H);
+      skyGradient.addColorStop(0, `rgb(${currentTop.join(',')})`);
+      skyGradient.addColorStop(1, `rgb(${currentBottom.join(',')})`);
+      ctx.fillStyle = skyGradient;
+      ctx.fillRect(0, 0, W, H);
+
+      // 2. 绘制星辰 (夜晚活跃度曲线)
+      let nightIntensity = 0;
+      if (tau >= 0.78) {
+        nightIntensity = smoothstep(0.78, 0.88, tau);
+      } else if (tau <= 0.22) {
+        nightIntensity = 1.0 - smoothstep(0.12, 0.22, tau);
+      }
+      if (nightIntensity > 0.02) {
+        ctx.save();
+        stars.forEach(s => {
+          // 周期性无缝正弦波闪烁
+          const twinkle = 0.5 + 0.5 * Math.sin((t / CYCLE_DURATION) * (Math.PI * 2 * s.speed) + s.phase);
+          const alpha = nightIntensity * twinkle;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+          ctx.shadowColor = 'rgba(255, 255, 255, 0.8)';
+          ctx.shadowBlur = 5;
+          ctx.fill();
+        });
+        ctx.restore();
+      }
+
+      // 3. 绘制太阳 (白昼东升西落拱形轨迹: tau 0.20 ~ 0.78)
+      if (tau >= 0.20 && tau <= 0.78) {
+        const s = (tau - 0.20) / 0.58; // 0 (东升) -> 0.5 (正午中天) -> 1 (西沉)
+        const sunX = W * (0.16 + 0.68 * s);
+        const sunY = H * (0.20 + 0.70 * Math.pow(2 * s - 1, 2));
+
+        let sunAlpha = 1.0;
+        if (s < 0.15) sunAlpha = smoothstep(0.0, 0.15, s);
+        else if (s > 0.85) sunAlpha = 1.0 - smoothstep(0.85, 1.0, s);
+
+        if (sunAlpha > 0.01) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(sunX, sunY, 72, 0, Math.PI * 2);
+
+          // 正午偏亮金白，黄昏偏深橙金
+          const isNoon = 1.0 - Math.abs(s - 0.5) * 2;
+          const sunColor = isNoon > 0.4 ? `rgba(255, 245, 200, ${sunAlpha})` : `rgba(255, 220, 150, ${sunAlpha})`;
+          const glowColor = isNoon > 0.4 ? 'rgba(255, 210, 100, 0.8)' : 'rgba(255, 140, 60, 0.85)';
+
+          ctx.fillStyle = sunColor;
+          ctx.shadowColor = glowColor;
+          ctx.shadowBlur = 45;
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+
+      // 4. 绘制月亮与地球照 (夜间东升西落轨迹: tau 0.74 ~ 1.0 与 0.0 ~ 0.26)
+      let m = -1; // 0 (东升) -> 0.5 (子夜正空) -> 1 (西落)
+      if (tau >= 0.74) {
+        m = (tau - 0.74) / 0.52;
+      } else if (tau <= 0.26) {
+        m = (tau + 0.26) / 0.52;
+      }
+
+      if (m >= 0 && m <= 1) {
+        const moonX = W * (0.18 + 0.64 * m);
+        const moonY = H * (0.24 + 0.66 * Math.pow(2 * m - 1, 2));
+
+        let moonAlpha = 1.0;
+        if (m < 0.15) moonAlpha = smoothstep(0.0, 0.15, m);
+        else if (m > 0.85) moonAlpha = 1.0 - smoothstep(0.85, 1.0, m);
+
+        if (moonAlpha > 0.01) {
+          ctx.save();
+          ctx.translate(moonX, moonY);
+          // 轨道倾角微调
+          ctx.rotate(-0.45 + (m - 0.5) * 0.35);
+
+          const R = 46; // 月球外球体真实半径
+          const d = 15; // 截割内圆偏心
+          const r = 45; // 截割内圆半径
+          const xIntersect = (r * r - R * R - d * d) / (2 * d);
+          const yIntersect = Math.sqrt(Math.max(0, R * R - xIntersect * xIntersect));
+          const theta = Math.atan2(yIntersect, xIntersect);
+          const phi = Math.atan2(yIntersect, xIntersect + d);
+
+          // A. 真实物理“地球照”（Earthshine / 达·芬奇光）
+          // 阴影中的月球暗面受地球反照光照射，微弱发光可见，完美构成完整的圆形天体球
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(0, 0, R, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(165, 185, 215, ${moonAlpha * 0.16})`;
+          ctx.shadowColor = `rgba(140, 175, 220, ${moonAlpha * 0.35})`;
+          ctx.shadowBlur = 10;
+          ctx.fill();
+          ctx.restore();
+
+          // B. 剪纸月牙几何路径函数 (解析交点零误差，两端针尖锐利闭合)
+          function drawCrescentPath() {
+            ctx.beginPath();
+            ctx.arc(0, 0, R, -theta, theta, false);
+            ctx.arc(-d, 0, r, phi, -phi, true);
+            ctx.closePath();
+          }
+
+          // C. 月牙外层漫射月晕 (严格沿月牙实体轮廓辐射)
+          ctx.save();
+          ctx.shadowColor = `rgba(160, 210, 255, ${moonAlpha * 0.6})`;
+          ctx.shadowBlur = 35;
+          ctx.fillStyle = `rgba(210, 235, 255, ${moonAlpha * 0.25})`;
+          drawCrescentPath();
+          ctx.fill();
+          ctx.restore();
+
+          // D. 月牙核心高亮剪纸实体层
+          ctx.save();
+          ctx.shadowColor = `rgba(200, 235, 255, ${moonAlpha * 0.9})`;
+          ctx.shadowBlur = 12;
+          ctx.fillStyle = `rgba(248, 252, 255, ${moonAlpha})`;
+          drawCrescentPath();
+          ctx.fill();
+          ctx.restore();
+
+          ctx.restore();
+        }
+      }
+
+      // 5. 辅助函数：绘制单层带有物理剪纸阴影的山峦路径
+      function drawPaperLayer(palette, shadowBlur, shadowOffsetY, drawPathFn) {
+        ctx.save();
+        const col = sampleCycleColor(palette, tau);
+        ctx.fillStyle = `rgb(${col.join(',')})`;
+        ctx.shadowColor = 'rgba(0, 4, 15, 0.45)';
+        ctx.shadowBlur = shadowBlur;
+        ctx.shadowOffsetY = shadowOffsetY;
+
+        ctx.beginPath();
+        drawPathFn(ctx);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // 周期性微动视差 (sin(2π*tau) 保证首尾帧绝对恒等闭环)
+      const parallax = Math.sin(tau * Math.PI * 2) * 8;
+
+      // ----------------- 图层 4：远景远山 (Furthest Peaks) -----------------
+      drawPaperLayer(layer4Palette, 25, 12, (c) => {
+        c.moveTo(0, H * 0.62);
+        c.bezierCurveTo(W * 0.25, H * 0.48, W * 0.45, H * 0.68, W * 0.65, H * 0.52);
+        c.bezierCurveTo(W * 0.82, H * 0.40, W * 0.92, H * 0.58, W, H * 0.50);
+        c.lineTo(W, H);
+        c.lineTo(0, H);
+      });
+
+      // ----------------- 图层 3：中远景山脉 (Mid-Far Ridges) -----------------
+      drawPaperLayer(layer3Palette, 30, 16, (c) => {
+        c.moveTo(0, H * 0.70 + parallax);
+        c.bezierCurveTo(W * 0.20, H * 0.62, W * 0.35, H * 0.75, W * 0.55, H * 0.60);
+        c.bezierCurveTo(W * 0.75, H * 0.48, W * 0.88, H * 0.66, W, H * 0.65);
+        c.lineTo(W, H);
+        c.lineTo(0, H);
+      });
+
+      // ----------------- 图层 2：中近景山丘 (Mid-Near Foothills) -----------------
+      drawPaperLayer(layer2Palette, 35, 20, (c) => {
+        c.moveTo(0, H * 0.78);
+        c.bezierCurveTo(W * 0.30, H * 0.85, W * 0.50, H * 0.68, W * 0.75, H * 0.82);
+        c.bezierCurveTo(W * 0.88, H * 0.88, W * 0.95, H * 0.72, W, H * 0.76);
+        c.lineTo(W, H);
+        c.lineTo(0, H);
+      });
+
+      // ----------------- 图层 1：前景剪影 (Foreground Layer) -----------------
+      drawPaperLayer(layer1Palette, 40, 24, (c) => {
+        c.moveTo(0, H * 0.88);
+        c.bezierCurveTo(W * 0.22, H * 0.76, W * 0.42, H * 0.96, W * 0.68, H * 0.84);
+        c.bezierCurveTo(W * 0.82, H * 0.76, W * 0.92, H * 0.92, W, H * 0.86);
+        c.lineTo(W, H);
+        c.lineTo(0, H);
+      });
+    };
+
+    // 默认自循环：仅在普通浏览器中双击直接预览时运行，离线自动化步进渲染时禁用
+    let startTime = null;
+    function loop(now) {
+      if (!startTime) startTime = now;
+      const elapsed = ((now - startTime) / 1000) % CYCLE_DURATION;
+      window.renderFrame(elapsed);
+      requestAnimationFrame(loop);
+    }
+    if (!window.navigator.webdriver && !window.__OFFLINE_RENDER__) {
+      requestAnimationFrame(loop);
+    }
+  </script>
+</body>
+</html>
